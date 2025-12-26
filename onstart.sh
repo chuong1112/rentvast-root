@@ -50,10 +50,16 @@ JSON
 
 sig="$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$CALLBACK_SECRET" -binary | xxd -p -c 256)"
 
+echo "[onstart] POST to: $CALLBACK_URL"
 echo "[onstart] POST webhook ready=${ready} code=${last_code}"
-curl -sS -X POST "$CALLBACK_URL" \
+
+resp="$(curl -sS -D - -o /tmp/webhook_resp.txt -w "\n[onstart] curl_exit=%{exitcode} http=%{http_code}\n" \
+  -X POST "$CALLBACK_URL" \
   -H "Content-Type: application/json" \
   -H "X-Signature: sha256=$sig" \
-  -d "$body" || true
+  --data-binary "$body" || true)"
 
-echo "[onstart] Done."
+echo "$resp"
+echo "[onstart] resp_body:"
+cat /tmp/webhook_resp.txt || true
+
