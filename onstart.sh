@@ -4,41 +4,81 @@ set -euo pipefail
 CALLBACK_URL="${CALLBACK_URL:-}"
 CALLBACK_SECRET="${CALLBACK_SECRET:-}"
 JUPYTER_TOKEN="${JUPYTER_TOKEN:-}"
-JUPYTER_PORT="${JUPYTER_PORT:-8888}"
+JUPYTER_PORT="${JUPYTER_PORT:-8080}"
+
+# mặc định: KHÔNG đợi jupyter (ổn định nhất)
+WAIT_FOR_JUPYTER="${WAIT_FOR_JUPYTER:-false}"
 
 MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-600}"
 SLEEP_SECONDS="${SLEEP_SECONDS:-3}"
 
 HOSTNAME_VAL="$(hostname || true)"
-# Vast có thể inject vài env khác nhau; giữ kiểu “có thì dùng”
 INSTANCE_ID="${VAST_INSTANCE_ID:-${INSTANCE_ID:-${CONTRACT_ID:-}}}"
+
+# ===== sanity / trim CRLF =====
+trim() { printf '%s' "$1" | tr -d '\r' | xargs; }
+CALLBACK_URL="$(trim "$CALLBACK_URL")"
+CALLBACK_SECRET="$(trim "$CALLBACK_SECRET")"
+JUPYTER_TOKEN="$(trim "$JUPYTER_TOKEN")"
+JUPYTER_PORT="$(trim "$JUPYTER_PORT")"
 
 if [[ -z "$CALLBACK_URL" || -z "$CALLBACK_SECRET" || -z "$JUPYTER_TOKEN" ]]; then
   echo "[onstart] Missing CALLBACK_URL/CALLBACK_SECRET/JUPYTER_TOKEN" >&2
   exit 1
 fi
 
-echo "[onstart] Waiting for Jupyter on 127.0.0.1:${JUPYTER_PORT} ..."
-deadline=$(( $(date +%s) + MAX_WAIT_SECONDS ))
-ready="false"
-last_code="000"
+ready="true"
+last_code="skipped"
+picked="skipped"
 
-while [[ $(date +%s) -lt $deadline ]]; do
-  last_code="$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:${JUPYTER_PORT}/" || echo "000")"
-  if [[ "$last_code" != "000" && "$last_code" -lt 500 ]]; then
-    ready="true"
-    break
-  fi
-  sleep "$SLEEP_SECONDS"
-done
+# ===== optional: wait for jupyter if you really want =====
+if [[ "$WAIT_FOR_JUPYTER" == "true" ]]; then
+  echo "[onstart] Waiting for Jupyter (optional) ..."
+  deadline=$(( $(date +%s) + MAX_WAIT_SECONDS ))
+  ready="false"
+  last_code="000"
+  picked=""
+
+  PORTS=("${JUPYTER_PORT}" "8080" "8888")
+  PATHS=("/" "/lab" "/tree")
+  SCHEMES=("http" "https")
+
+  while [[ $(date +%s) -lt $deadline ]]; do
+    for scheme in "${SCHEMES[@]}"; do
+      for p in "${PORTS[@]}"; do
+        [[ -z "$p" ]] && continue
+        for path in "${PATHS[@]}"; do
+          code="$(curl -k -sS -o /dev/null -w "%{http_code}" "${scheme}://127.0.0.1:${p}${path}" || echo "000")"
+          last_code="$code"
+          if [[ "$code" != "000" && "$code" -lt 500 ]]; then
+            ready="true"
+            picked="${scheme}://127.0.0.1:${p}${path}"
+            JUPYTER_PORT="$p"
+            break 3
+          fi
+        done
+      done
+    done
+    sleep "$SLEEP_SECONDS"
+  done
+
+  echo "[onstart] wait done ready=${ready} last_code=${last_code} picked=${picked}"
+fi
 
 ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
+# event name phân biệt rõ: started vs jupyter_ready
+event_name="instance_started"
+if [[ "$WAIT_FOR_JUPYTER" == "true" ]]; then
+  event_name="jupyter_ready"
+fi
+
 body="$(cat <<JSON
 {
-  "event": "jupyter_ready",
+  "event": "${event_name}",
   "ready": ${ready},
   "http_code": "${last_code}",
+  "picked": "${picked}",
   "ts": "${ts}",
   "jupyter_token": "${JUPYTER_TOKEN}",
   "jupyter_port": "${JUPYTER_PORT}",
@@ -50,10 +90,11 @@ JSON
 
 sig="$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$CALLBACK_SECRET" -binary | xxd -p -c 256)"
 
-echo "[onstart] POST to: $CALLBACK_URL"
-echo "[onstart] POST webhook ready=${ready} code=${last_code}"
+echo "[onstart] POST to: $(printf '%q' "$CALLBACK_URL")"
+echo "[onstart] event=${event_name} ready=${ready} code=${last_code}"
 
-resp="$(curl -sS -D - -o /tmp/webhook_resp.txt -w "\n[onstart] curl_exit=%{exitcode} http=%{http_code}\n" \
+resp="$(curl -sS -D - -o /tmp/webhook_resp.txt \
+  -w "\n[onstart] curl_exit=%{exitcode} http=%{http_code}\n" \
   -X POST "$CALLBACK_URL" \
   -H "Content-Type: application/json" \
   -H "X-Signature: sha256=$sig" \
@@ -63,3 +104,4 @@ echo "$resp"
 echo "[onstart] resp_body:"
 cat /tmp/webhook_resp.txt || true
 
+echo "[onstart] Done."
