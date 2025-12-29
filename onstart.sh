@@ -6,8 +6,9 @@ CALLBACK_SECRET="${CALLBACK_SECRET:-}"
 JUPYTER_TOKEN="${JUPYTER_TOKEN:-}"
 JUPYTER_PORT="${JUPYTER_PORT:-8080}"
 
-# mặc định: KHÔNG đợi jupyter (ổn định nhất)
+# Optional
 WAIT_FOR_JUPYTER="${WAIT_FOR_JUPYTER:-false}"
+CONTRACT_ID="${CONTRACT_ID:-${VAST_CONTRACT_ID:-}}"
 
 MAX_WAIT_SECONDS="${MAX_WAIT_SECONDS:-600}"
 SLEEP_SECONDS="${SLEEP_SECONDS:-3}"
@@ -15,27 +16,28 @@ SLEEP_SECONDS="${SLEEP_SECONDS:-3}"
 HOSTNAME_VAL="$(hostname || true)"
 INSTANCE_ID="${VAST_INSTANCE_ID:-${INSTANCE_ID:-${CONTRACT_ID:-}}}"
 
-# ===== sanity / trim CRLF =====
 trim() { printf '%s' "$1" | tr -d '\r' | xargs; }
 CALLBACK_URL="$(trim "$CALLBACK_URL")"
 CALLBACK_SECRET="$(trim "$CALLBACK_SECRET")"
 JUPYTER_TOKEN="$(trim "$JUPYTER_TOKEN")"
 JUPYTER_PORT="$(trim "$JUPYTER_PORT")"
+WAIT_FOR_JUPYTER="$(trim "$WAIT_FOR_JUPYTER")"
+CONTRACT_ID="$(trim "$CONTRACT_ID")"
+INSTANCE_ID="$(trim "$INSTANCE_ID")"
 
 if [[ -z "$CALLBACK_URL" || -z "$CALLBACK_SECRET" || -z "$JUPYTER_TOKEN" ]]; then
   echo "[onstart] Missing CALLBACK_URL/CALLBACK_SECRET/JUPYTER_TOKEN" >&2
   exit 1
 fi
 
-ready="true"
+ready=true
 last_code="skipped"
 picked="skipped"
 
-# ===== optional: wait for jupyter if you really want =====
 if [[ "$WAIT_FOR_JUPYTER" == "true" ]]; then
   echo "[onstart] Waiting for Jupyter (optional) ..."
   deadline=$(( $(date +%s) + MAX_WAIT_SECONDS ))
-  ready="false"
+  ready=false
   last_code="000"
   picked=""
 
@@ -51,7 +53,7 @@ if [[ "$WAIT_FOR_JUPYTER" == "true" ]]; then
           code="$(curl -k -sS -o /dev/null -w "%{http_code}" "${scheme}://127.0.0.1:${p}${path}" || echo "000")"
           last_code="$code"
           if [[ "$code" != "000" && "$code" -lt 500 ]]; then
-            ready="true"
+            ready=true
             picked="${scheme}://127.0.0.1:${p}${path}"
             JUPYTER_PORT="$p"
             break 3
@@ -67,12 +69,12 @@ fi
 
 ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-# event name phân biệt rõ: started vs jupyter_ready
 event_name="instance_started"
 if [[ "$WAIT_FOR_JUPYTER" == "true" ]]; then
   event_name="jupyter_ready"
 fi
 
+# Build JSON body (include contract_id if available)
 body="$(cat <<JSON
 {
   "event": "${event_name}",
@@ -80,6 +82,7 @@ body="$(cat <<JSON
   "http_code": "${last_code}",
   "picked": "${picked}",
   "ts": "${ts}",
+  "contract_id": "${CONTRACT_ID}",
   "jupyter_token": "${JUPYTER_TOKEN}",
   "jupyter_port": "${JUPYTER_PORT}",
   "hostname": "${HOSTNAME_VAL}",
@@ -91,7 +94,7 @@ JSON
 sig="$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$CALLBACK_SECRET" -binary | xxd -p -c 256)"
 
 echo "[onstart] POST to: $(printf '%q' "$CALLBACK_URL")"
-echo "[onstart] event=${event_name} ready=${ready} code=${last_code}"
+echo "[onstart] event=${event_name} ready=${ready} code=${last_code} instance_id=${INSTANCE_ID}"
 
 resp="$(curl -sS -D - -o /tmp/webhook_resp.txt \
   -w "\n[onstart] curl_exit=%{exitcode} http=%{http_code}\n" \
