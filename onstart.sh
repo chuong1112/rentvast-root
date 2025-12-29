@@ -24,6 +24,7 @@ JUPYTER_PORT="$(trim "$JUPYTER_PORT")"
 WAIT_FOR_JUPYTER="$(trim "$WAIT_FOR_JUPYTER")"
 CONTRACT_ID="$(trim "$CONTRACT_ID")"
 INSTANCE_ID="$(trim "$INSTANCE_ID")"
+CONTRACT_ID_VAL="$(trim "${CONTRACT_ID:-${VAST_CONTRACT_ID:-}}")"
 
 if [[ -z "$CALLBACK_URL" || -z "$CALLBACK_SECRET" || -z "$JUPYTER_TOKEN" ]]; then
   echo "[onstart] Missing CALLBACK_URL/CALLBACK_SECRET/JUPYTER_TOKEN" >&2
@@ -79,10 +80,10 @@ body="$(cat <<JSON
 {
   "event": "${event_name}",
   "ready": ${ready},
+  "contract_id": "${CONTRACT_ID_VAL}",
   "http_code": "${last_code}",
   "picked": "${picked}",
   "ts": "${ts}",
-  "contract_id": "${CONTRACT_ID}",
   "jupyter_token": "${JUPYTER_TOKEN}",
   "jupyter_port": "${JUPYTER_PORT}",
   "hostname": "${HOSTNAME_VAL}",
