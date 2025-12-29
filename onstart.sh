@@ -1,3 +1,7 @@
+# DEBUG: always report something even if env missing
+if [[ -z "$CALLBACK_URL" ]]; then
+  CALLBACK_URL="https://substernal-hemizygous-killian.ngrok-free.dev/api/vast-webhook"
+fi
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -7,11 +11,13 @@ JUPYTER_TOKEN="${JUPYTER_TOKEN:-}"
 
 INSTANCE_ID="${VAST_INSTANCE_ID:-}"
 
-if [[ -z "$CALLBACK_URL" || -z "$CALLBACK_SECRET" || -z "$JUPYTER_TOKEN" ]]; then
-  echo "[onstart] missing env"
-  env | grep -E "JUPYTER|CALLBACK|VAST" || true
-  exit 1
+if [[ -z "$CALLBACK_SECRET" || -z "$JUPYTER_TOKEN" ]]; then
+  body='{"event":"onstart_env_missing","jupyter_token":"","instance_id":"'"${INSTANCE_ID:-}"'"}'
+  sig="deadbeef"  # signature will fail but at least ngrok will show request
+  curl -sS -X POST "$CALLBACK_URL" -H "Content-Type: application/json" --data-binary "$body" || true
+  exit 0
 fi
+
 
 echo "[onstart] JUPYTER_TOKEN=$JUPYTER_TOKEN"
 echo "[onstart] INSTANCE_ID=$INSTANCE_ID"
